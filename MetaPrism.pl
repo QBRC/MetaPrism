@@ -32,7 +32,7 @@ GetOptions(
 	'd=s' => \(my $diamond = 'diamond'),
 	'D=s' => \(my $diamondDatabaseFile),
 	'G=s' => \(my $geneDefinitionFile),
-	'T=s' => \(my $proteinGeneFile),
+	'g=s' => \(my $proteinGeneFile),
 	'm=s' => \(my $minimap2File),
 	'r=s' => \(my $rank = 'species'),
 	'taxonFile=s' => \(my $taxonFile = ''),
@@ -40,6 +40,7 @@ GetOptions(
 	'printAllProteinMappings' => \(my $printAllProteinMappings = ''),
 	'numberPerProteinMapping=i' => \(my $numberPerProteinMapping = 10000000),
 	'fastaLineLength=i' => \(my $fastaLineLength = 80),
+	'positionFile=s' => \(my $positionFile = ''),
 );
 if($help || scalar(@ARGV) == 0) {
 	die <<EOF;
@@ -60,7 +61,7 @@ Options: -h       display this help message
          -d FILE  diamond path [$diamond]
          -D FILE  diamond database file
          -G FILE  gene definition file
-         -T FILE  protein-to-gene file
+         -g FILE  protein-to-gene file
          -m FILE  minimap2 file
          -r STR   taxonomic rank [$rank]
 
@@ -234,6 +235,7 @@ if($inputIsProteinFastaFile eq '') {
 	sub printChromosomeTranslationSequences {
 		foreach(@_) {
 			my ($chromosome, $sequence) = @$_;
+			$sequence =~ tr/a-z/A-Z/;
 			my $sequenceLength = length($sequence);
 			foreach my $frame (0 .. 2) {
 				my @startIndexList = ();
@@ -283,6 +285,8 @@ my %chromosomeHash = ();
 {
 	open(my $writer, ($inputIsProteinFastaFile ? "| sort -u > $temporaryPrefix.gene.txt" : "| sort -t '\t' -k1,1 -k2,2n -k3,3n -k4 | uniq > $temporaryPrefix.gene.txt"));
 	open(my $reader, ($inputIsProteinFastaFile ? $genomeFastaFile : "$temporaryPrefix.fasta"));
+	open(my $writerPosition, "> $positionFile") if($positionFile ne '');
+	print $writerPosition join("\t", (grep {$_ ne 'variant'} @columnList), 'query_position', 'target_position'), "\n" if($positionFile ne '');
 	my $protein;
 	my %proteinSequenceHash = ();
 	while(my $line = <$reader>) {
@@ -303,6 +307,7 @@ my %chromosomeHash = ();
 	}
 	close($reader);
 	close($writer);
+	close($writerPosition) if($positionFile ne '');
 	system("rm $temporaryPrefix.fasta") if($inputIsProteinFastaFile eq '');
 
 	sub printGenes {
@@ -430,6 +435,17 @@ my %chromosomeHash = ();
 			@variantList = @{$tokenHash->{'variant'}};
 			$tokenHash->{'variant'} = join(',', map {join('|', @$_[1, 2, 3])} @variantList);
 			print $writer join("\t", @$tokenHash{@columnList}), "\n";
+
+			if($positionFile ne '') {
+				my @positionList = getPositionList(@$tokenHash{'pos', 'cigar'});
+				my $queryStart = $tokenHash->{'ZS:i'};
+				foreach my $index (0 .. $#positionList) {
+					my $position = $positionList[$index];
+					if($position ne '') {
+						print $writerPosition join("\t", @$tokenHash{grep {$_ ne 'variant'} @columnList}, $queryStart + $index, $position), "\n";
+					}
+				}
+			}
 		}
 	}
 
@@ -701,4 +717,29 @@ sub getReverseComplementarySequence {
 	my ($sequence) = @_;
 	($sequence = reverse($sequence)) =~ tr/ACGT/TGCA/;
 	return $sequence;
+}
+
+sub getPositionList {
+	my ($position, $cigar) = @_;
+	my @positionList = ();
+	my $index = 0;
+	while($cigar =~ s/^([0-9]+)([MIDNSHP=X])//) {
+		my ($length, $operation) = ($1, $2);
+		if($operation eq 'M') {
+			@positionList[$index .. $index + $length - 1] = $position .. $position + $length - 1;
+			$index += $length;
+			$position += $length;
+		} elsif($operation eq 'I') {
+			@positionList[$index .. $index + $length - 1] = ('') x $length;
+			$index += $length;
+		} elsif($operation eq 'D') {
+			$position += $length;
+		} elsif($operation eq 'N') {
+			$position += $length;
+		} elsif($operation eq 'S') {
+			@positionList[$index .. $index + $length - 1] = ('') x $length;
+			$index += $length;
+		}
+	}
+	return @positionList;
 }
