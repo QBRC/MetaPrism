@@ -392,7 +392,7 @@ my %chromosomeHash = ();
 			foreach my $index (0 .. $#variantList) {
 				my ($queryPosition, $position, $referenceAA, $variantAA) = @{$variantList[$index]};
 				$queryStartEndList[$index]->[1] = $queryPosition - 1;
-				$queryStartEndList[$index + 1]->[0] = $queryPosition + ($variantAA =~ /^[A-Z]*$/ ? length($variantAA) : $variantAA);
+				$queryStartEndList[$index + 1]->[0] = $queryPosition + ($variantAA =~ /^[A-Z*]*$/ ? length($variantAA) : $variantAA);
 			}
 			$queryStartEndList[$#variantList + 1]->[1] = $querySequenceLength + 1;
 			foreach(@queryStartEndList) {
@@ -518,7 +518,12 @@ my %chromosomeHash = ();
 		return @variantList;
 	}
 }
-if(%chromosomeHash && $minimap2File) {
+if($minimap2File) {
+	print join("\t", @columnList, 'taxonId', 'taxonName', 'taxonRank'), "\n";
+} else {
+	print join("\t", @columnList), "\n";
+}
+if($minimap2File && %chromosomeHash) {
 	{
 		open(my $writer, "> $temporaryPrefix.genome.fasta");
 		open(my $reader, ($genomeFastaFile =~ /\.gz$/ ? "gzip -dc $genomeFastaFile |" : $genomeFastaFile));
@@ -622,7 +627,6 @@ if(%chromosomeHash && $minimap2File) {
 			}
 		}
 	}
-	print join("\t", @columnList, 'taxonId', 'taxonName', 'taxonRank'), "\n";
 	if(-s "$temporaryPrefix.gene.txt") {
 		use Bio::DB::Taxonomy;
 		my $db = Bio::DB::Taxonomy->new(-source => 'flatfile', -directory => $dataPath, -nodesfile => "$dataPath/nodes.dmp", -namesfile => "$dataPath/names.dmp");
@@ -692,7 +696,6 @@ if(%chromosomeHash && $minimap2File) {
 		system("rm $temporaryPrefix.taxon.txt");
 	}
 } else {
-	print join("\t", @columnList), "\n";
 	if(-s "$temporaryPrefix.gene.txt") {
 		open(my $reader, "$temporaryPrefix.gene.txt");
 		while(my $line = <$reader>) {
