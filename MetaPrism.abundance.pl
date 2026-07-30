@@ -13,6 +13,9 @@ use Getopt::Long qw(:config no_ignore_case);
 my $dataPath = "$codePath/data";
 system("mkdir -p $dataPath");
 
+my $defaultBaseAbundanceGenes = 'K02950,K02874,K02946,K02948,K02867,K02952,K02886,K02988,K02992,K02965';
+my $defaultNumberOfBaseAbundanceGenes = 10;
+
 chomp(my $hostname = `hostname`);
 my $temporaryDirectory = $ENV{'TMPDIR'};
 $temporaryDirectory = '/tmp' unless($temporaryDirectory);
@@ -26,7 +29,7 @@ GetOptions(
 	'F=i' => \(my $excludeFlag = 0),
 	'S=s' => \(my $stranded = ''),
 	'B=f' => \(my $baseAbundance = ''),
-	'b=s' => \(my $baseAbundanceGenes = 10),
+	'b=s' => \(my $baseAbundanceGenes = ''),
 	'e=i' => \(my $ignoreOneSideOutlierNumberOfBaseAbundanceGenes = 2),
 	'use_merged_bam_file' => \(my $use_merged_bam_file = ''),
 	'use_samtools_depth' => \(my $use_samtools_depth = ''),
@@ -44,12 +47,16 @@ Options: -h       display this help message
          -F INT   exclude flag [$excludeFlag]
          -S STR   stranded, "f" or "r"
          -B FLOAT base abundance
-         -b STR   base abundance genes or number of base abundance genes [$baseAbundanceGenes]
+         -b STR   base abundance genes or number of base abundance genes [$defaultBaseAbundanceGenes or $defaultNumberOfBaseAbundanceGenes if $dataPath/single_copy_gene.count.txt is available]
          -e STR   ignore one-side outlier number of base abundance genes [$ignoreOneSideOutlierNumberOfBaseAbundanceGenes]
          --use_merged_bam_file use a temporary merged bam file
          --use_samtools_depth use samtools depth instead of parsing cigar strings
 
 EOF
+}
+if($baseAbundanceGenes eq '') {
+	$baseAbundanceGenes = $defaultBaseAbundanceGenes;
+	$baseAbundanceGenes = $defaultNumberOfBaseAbundanceGenes if(-s "$dataPath/single_copy_gene.count.txt" and -r "$dataPath/single_copy_gene.count.txt");
 }
 {
 	my $parentPid = $$;
