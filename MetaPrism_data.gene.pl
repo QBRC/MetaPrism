@@ -32,7 +32,8 @@ GetOptions(
 	'a' => \(my $databaseAMR = ''),
 	'r' => \(my $redownload = ''),
 	't=s' => \(my $taxonIds = '2,2157,4751'),
-	'i=s' => \(my $unirefIdentity = '90'),
+	'i=i' => \(my $unirefIdentity = 100),
+	's=s' => \(my $searchDatabaseTime = ''),
 );
 if($help) {
 	die <<EOF;
@@ -44,18 +45,24 @@ Options: -h       display this help message
          -r       redownload data
          -b       build orthology database
          -a       build AMR gene database
-         -t STR   NCBI taxonomy ID [$taxonIds]
+         -t STR   comma-separated NCBI taxonomy IDs [$taxonIds]
          -i INT   UniRef identity [$unirefIdentity]
+         -s STR   search database time
 
 EOF
 }
+my @taxonIdList = ();
+if($taxonIds =~ /^[0-9]+(,[0-9]+)*$/) {
+	@taxonIdList = sort {$a <=> $b} eval($taxonIds);
+	@taxonIdList = @taxonIdList[0, grep {$taxonIdList[$_ - 1] != $taxonIdList[$_]} 1 .. $#taxonIdList];
+} else {
+	die "wrong NCBI taxonomy IDs\n";
+}
+unless(grep {$unirefIdentity eq $_} 50, 90, 100) {
+	die "wrong UniRef identity\n";
+}
 my $database = '';
 if($databaseOrthology) {
-	my @taxonIdList = ();
-	if($taxonIds ne '') {
-		@taxonIdList = sort {$a <=> $b} eval($taxonIds);
-		@taxonIdList = @taxonIdList[0, grep {$taxonIdList[$_ - 1] != $taxonIdList[$_]} 1 .. $#taxonIdList];
-	}
 	my %taxonIdHash = ();
 	if(@taxonIdList) {
 		if(not -r "$dataPath/nodes.dmp" or not -r "$dataPath/names.dmp" or $redownload) {
@@ -78,8 +85,7 @@ if($databaseOrthology) {
 			setTaxonIdHash($_) foreach(@taxonList);
 		}
 	}
-	$database = join('_', 'orthology', "uniref$unirefIdentity", @taxonIdList);
-	$database = join('.', $database, getTimeString());
+	$database = join('.', getDatabasePrefix(), getTimeString());
 	my %unirefOrthologyCountHash = ();
 	my $pid = open2(my $reader, my $writer, "sort -t '\t' -k1,1 -k2 | uniq | cut -f2-");
 	open(my $writerLog, "> $dataPath/$database.log");
@@ -245,10 +251,28 @@ if($databaseOrthology) {
 		close($writer);
 	}
 } else {
-	downloadDataFile('database');
-	open(my $reader, "$dataPath/database") or die "Can't open '$dataPath/database': $!";
-	chomp($database = <$reader>);
-	close($reader);
+	if($searchDatabaseTime) {
+		my $databasePrefix = getDatabasePrefix();
+		my @databaseList = ();
+		downloadDataFile('databases');
+		open(my $reader, "$dataPath/databases") or die "Can't open '$dataPath/databases': $!";
+		while(my $line = <$reader>) {
+			chomp($line);
+			push(@databaseList, $line) if($line =~ /^$databasePrefix\.$searchDatabaseTime/);
+		}
+		close($reader);
+		$database = join(', ', @databaseList);
+		die "no database matched.\n" if(scalar(@databaseList) == 0);
+		die "multiple database matched: $database\n" if(scalar(@databaseList) > 1);
+		open(my $writer, "> $dataPath/database");
+		print $writer "$database\n";
+		close($writer);
+	} else {
+		downloadDataFile('database');
+		open(my $reader, "$dataPath/database") or die "Can't open '$dataPath/database': $!";
+		chomp($database = <$reader>);
+		close($reader);
+	}
 	downloadDataFile("$database.fasta.gz");
 	system("gzip -df $dataPath/$database.fasta.gz");
 	downloadDataFile("$database.definition.txt");
@@ -267,6 +291,10 @@ sub downloadDataFile {
 			system("rm $dataPath/$file") if(-z "$dataPath/$file");
 		}
 	}
+}
+
+sub getDatabasePrefix {
+	return join('_', 'orthology', "uniref$unirefIdentity", @taxonIdList);
 }
 
 sub efetch {

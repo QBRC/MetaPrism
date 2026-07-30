@@ -28,7 +28,8 @@ GetOptions(
 	'B=f' => \(my $baseAbundance = ''),
 	'b=s' => \(my $baseAbundanceGenes = 10),
 	'e=i' => \(my $ignoreOneSideOutlierNumberOfBaseAbundanceGenes = 2),
-	'merge' => \(my $merge = ''),
+	'use_merged_bam_file' => \(my $use_merged_bam_file = ''),
+	'use_samtools_depth' => \(my $use_samtools_depth = ''),
 );
 if($help || scalar(@ARGV) == 0) {
 	die <<EOF;
@@ -45,6 +46,8 @@ Options: -h       display this help message
          -B FLOAT base abundance
          -b STR   base abundance genes or number of base abundance genes [$baseAbundanceGenes]
          -e STR   ignore one-side outlier number of base abundance genes [$ignoreOneSideOutlierNumberOfBaseAbundanceGenes]
+         --use_merged_bam_file use a temporary merged bam file
+         --use_samtools_depth use samtools depth instead of parsing cigar strings
 
 EOF
 }
@@ -96,7 +99,16 @@ EOF
 	}
 }
 my $temporaryPrefix = "$temporaryDirectory/MetaPrism.$hostname.$$";
-if($baseAbundanceGenes =~ /^[0-9]+$/) {
+if(-r $baseAbundanceGenes) {
+	my @baseAbundanceGeneList = ();
+	open(my $reader, $baseAbundanceGenes);
+	while(my $line = <$reader>) {
+		chomp($line);
+		push(@baseAbundanceGeneList, $line);
+	}
+	close($reader);
+	$baseAbundanceGenes = join(',', @baseAbundanceGeneList);
+} elsif($baseAbundanceGenes =~ /^[0-9]+$/) {
 	my @baseAbundanceGeneList = ();
 	open(my $reader, "$dataPath/single_copy_gene.count.txt") or die "Can't open '$dataPath/single_copy_gene.count.txt': $!";
 	while(scalar(@baseAbundanceGeneList) < $baseAbundanceGenes) {
@@ -108,12 +120,50 @@ if($baseAbundanceGenes =~ /^[0-9]+$/) {
 	$baseAbundanceGenes = join(',', @baseAbundanceGeneList);
 }
 my ($metaPrismFile, @bamFileList) = @ARGV;
-if($merge) {
-	system("samtools merge --threads $threads $temporaryPrefix.bam @bamFileList");
-	system("samtools index $temporaryPrefix.bam");
-	@bamFileList = ("$temporaryPrefix.bam");
+if($use_merged_bam_file || $use_samtools_depth) {
+	if(scalar(@bamFileList) == 1) {
+		system("ln -sfr @bamFileList $temporaryPrefix.bam");
+	} else {
+		system("samtools merge --threads $threads $temporaryPrefix.bam @bamFileList");
+	}
+	if($use_samtools_depth) {
+		if($minimumMappingQuality == 0 && $includeFlag == 0 && $excludeFlag == 0) {
+			system("ln -sfr $temporaryPrefix.bam $temporaryPrefix.filtered.bam");
+		} else {
+			system("samtools view -b -q $minimumMappingQuality -f $includeFlag -F $excludeFlag $temporaryPrefix.bam > $temporaryPrefix.filtered.bam");
+		}
+		if($stranded) {
+			open(my $reader, "samtools view -h $temporaryPrefix.filtered.bam |");
+			open(my $writerF, "| samtools view -b - > $temporaryPrefix.filtered.f.bam");
+			open(my $writerR, "| samtools view -b - > $temporaryPrefix.filtered.r.bam");
+			my @samMandatoryColumnList = ('qname', 'flag', 'rname', 'pos', 'mapq', 'cigar', 'rnext', 'pnext', 'tlen', 'seq', 'qual');
+			while(my $line = <$reader>) {
+				chomp($line);
+				if($line =~ /^\@/) {
+					print $writerF $line, "\n";
+					print $writerR $line, "\n";
+					next;
+				}
+				my %tokenHash = ();
+				(@tokenHash{@samMandatoryColumnList}, my @tagTypeValueList) = split(/\t/, $line, -1);
+				$tokenHash{"$_->[0]:$_->[1]"} = $_->[2] foreach(map {[split(/:/, $_, 3)]} @tagTypeValueList);
+				print $writerF $line, "\n" if(grep {($tokenHash{'flag'} & 253) == $_} 97, 145, 0);
+				print $writerR $line, "\n" if(grep {($tokenHash{'flag'} & 253) == $_} 81, 161, 16);
+			}
+			close($reader);
+			close($writerF);
+			close($writerR);
+			system("samtools index $temporaryPrefix.filtered.f.bam");
+			system("samtools index $temporaryPrefix.filtered.r.bam");
+		} else {
+			system("samtools index $temporaryPrefix.filtered.bam");
+		}
+	} else {
+		system("samtools index $temporaryPrefix.bam");
+		@bamFileList = ("$temporaryPrefix.bam");
+	}
 }
-my $samModule = eval {require Bio::DB::Sam; 1;};
+my $use_sam_module = eval {require Bio::DB::Sam; 1;};
 foreach my $bamFile (@bamFileList) {
 	if(-r "$bamFile.bai") {
 	} else {
@@ -199,20 +249,40 @@ close($writer);
 }
 close($reader);
 waitpid($pid, 0);
-if($merge) {
+if($use_merged_bam_file || $use_samtools_depth) {
 	system("rm $temporaryPrefix.bam");
-	system("rm $temporaryPrefix.bam.bai");
+	if($use_samtools_depth) {
+		system("rm $temporaryPrefix.filtered.bam");
+		if($stranded) {
+			system("rm $temporaryPrefix.filtered.f.bam");
+			system("rm $temporaryPrefix.filtered.f.bam.bai");
+			system("rm $temporaryPrefix.filtered.r.bam");
+			system("rm $temporaryPrefix.filtered.r.bam.bai");
+		} else {
+			system("rm $temporaryPrefix.filtered.bam.bai");
+		}
+	} else {
+		system("rm $temporaryPrefix.bam.bai");
+	}
 }
 
 sub printAbundance {
-	my @samList = map {Bio::DB::Sam->new(-bam => $_)} @bamFileList if($samModule);
+	my @samList = map {Bio::DB::Sam->new(-bam => $_)} @bamFileList if($use_sam_module);
 	foreach(@_) {
 		my ($order, @tokenList) = @$_;
 		my %tokenHash = ();
 		@tokenHash{@columnList} = @tokenList;
 		my ($chromosome, $start, $end, $strand) = @tokenHash{'chromosome', 'start', 'end', 'strand'};
 		my $depth = 0;
-		if($samModule) {
+		if($use_samtools_depth) {
+			if($stranded eq '') {
+				$depth = getDepth("$temporaryPrefix.filtered.bam", $chromosome, $start, $end);
+			} elsif((($stranded eq 'f' || $stranded eq 'forward') && $strand eq '+') || (($stranded eq 'r' || $stranded eq 'reverse') && $strand eq '-')) {
+				$depth = getDepth("$temporaryPrefix.filtered.f.bam", $chromosome, $start, $end);
+			} elsif((($stranded eq 'f' || $stranded eq 'forward') && $strand eq '-') || (($stranded eq 'r' || $stranded eq 'reverse') && $strand eq '+')) {
+				$depth = getDepth("$temporaryPrefix.filtered.r.bam", $chromosome, $start, $end);
+			}
+		} elsif($use_sam_module) {
 			foreach my $sam (@samList) {
 				foreach my $alignment ($sam->get_features_by_location(-seq_id => $chromosome, -start => $start, -end => $end)) {
 					next if($alignment->qual < $minimumMappingQuality);
@@ -253,6 +323,20 @@ sub printAbundance {
 		my $abundance = $meanDepth;
 		forkPrint(join("\t", $order, @tokenList, $abundance), "\n");
 	}
+}
+
+sub getDepth {
+	my ($bamFile, $chromosome, $start, $end) = @_;
+	my $depth = 0;
+	open(my $reader, "samtools depth -a -a -r $chromosome:$start-$end $bamFile |");
+	while(my $line = <$reader>) {
+		chomp($line);
+		my %tokenHash = ();
+		@tokenHash{'chromosome', 'position', 'depth'} = split(/\t/, $line, -1);
+		$depth += $tokenHash{'depth'};
+	}
+	close($reader);
+	return $depth;
 }
 
 sub getPositionList {
