@@ -525,5 +525,4 @@ Options: -h       display this help message
 
 ## Citation
 
-MetaPrism: A Toolkit for Joint Taxa/Gene Analysis of Metagenomic Sequencing Data
-https://www.biorxiv.org/content/10.1101/664748v1
+Kim J, Jiang S, Wang Y, Xiao G, Xie Y, Liu DJ, Li Q, Koh A, Zhan X. MetaPrism: A versatile toolkit for joint taxa/gene analysis of metagenomic sequencing data. G3 (Bethesda). 2021 Apr 15;11(4):jkab046. doi: 10.1093/g3journal/jkab046. PMID: 33713107; PMCID: PMC8049424.
