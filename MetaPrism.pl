@@ -312,7 +312,7 @@ my %chromosomeHash = ();
 
 	sub printGenes {
 		{
-			open(my $writer, "| $diamond blastp --threads $threads --db $diamondDatabaseFile --out $temporaryPrefix.sam --outfmt 101 --evalue $evalue --unal 0 --tmpdir $temporaryDirectory --masking 0 --quiet --max-target-seqs $maximumTarget");
+			open(my $writer, "| $diamond blastp --threads $threads --db $diamondDatabaseFile --out $temporaryPrefix.sam --outfmt 101 --evalue $evalue --unal 0 --tmpdir $temporaryDirectory --masking 0 --quiet --max-target-seqs $maximumTarget 1>&2");
 			foreach my $protein (keys %proteinSequenceHash) {
 				print $writer ">$protein\n";
 				writeFastaSequence($writer, $proteinSequenceHash{$protein});

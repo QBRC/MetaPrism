@@ -6,7 +6,6 @@ local $SIG{__WARN__} = sub { die $_[0] };
 
 use Cwd 'abs_path';
 use IPC::Open2;
-use List::Util qw(sum);
 use Getopt::Long qw(:config no_ignore_case);
 
 (my $codePath = abs_path($0)) =~ s/\/[^\/]*$//;
@@ -29,8 +28,7 @@ GetOptions(
 	'F=i' => \(my $excludeFlag = 0),
 	'S=s' => \(my $stranded = ''),
 	'B=f' => \(my $baseAbundance = ''),
-	'b=s' => \(my $baseAbundanceGenes = ''),
-	'e=i' => \(my $ignoreOneSideOutlierNumberOfBaseAbundanceGenes = 2),
+	'b=s' => \(my $baseAbundanceGenes),
 	'use_merged_bam_file' => \(my $use_merged_bam_file = ''),
 	'use_samtools_depth' => \(my $use_samtools_depth = ''),
 );
@@ -48,15 +46,37 @@ Options: -h       display this help message
          -S STR   stranded, "f" or "r"
          -B FLOAT base abundance
          -b STR   base abundance genes or number of base abundance genes [$defaultBaseAbundanceGenes or $defaultNumberOfBaseAbundanceGenes if $dataPath/single_copy_gene.count.txt is available]
-         -e STR   ignore one-side outlier number of base abundance genes [$ignoreOneSideOutlierNumberOfBaseAbundanceGenes]
          --use_merged_bam_file use a temporary merged bam file
          --use_samtools_depth use samtools depth instead of parsing cigar strings
 
 EOF
 }
-if($baseAbundanceGenes eq '') {
+my $temporaryPrefix = "$temporaryDirectory/MetaPrism.$hostname.$$";
+unless(defined($baseAbundanceGenes)) {
 	$baseAbundanceGenes = $defaultBaseAbundanceGenes;
 	$baseAbundanceGenes = $defaultNumberOfBaseAbundanceGenes if(-s "$dataPath/single_copy_gene.count.txt" and -r "$dataPath/single_copy_gene.count.txt");
+}
+if($baseAbundanceGenes ne '') {
+	if(-r $baseAbundanceGenes) {
+		my @baseAbundanceGeneList = ();
+		open(my $reader, $baseAbundanceGenes);
+		while(my $line = <$reader>) {
+			chomp($line);
+			push(@baseAbundanceGeneList, $line);
+		}
+		close($reader);
+		$baseAbundanceGenes = join(',', @baseAbundanceGeneList);
+	} elsif($baseAbundanceGenes =~ /^[0-9]+$/) {
+		my @baseAbundanceGeneList = ();
+		open(my $reader, "$dataPath/single_copy_gene.count.txt") or die "Can't open '$dataPath/single_copy_gene.count.txt': $!";
+		while(scalar(@baseAbundanceGeneList) < $baseAbundanceGenes) {
+			chomp(my $line = <$reader>);
+			my ($baseAbundanceGene) = split(/\t/, $line, -1);
+			push(@baseAbundanceGeneList, $baseAbundanceGene);
+		}
+		close($reader);
+		$baseAbundanceGenes = join(',', @baseAbundanceGeneList);
+	}
 }
 {
 	my $parentPid = $$;
@@ -104,27 +124,6 @@ if($baseAbundanceGenes eq '') {
 			print @_;
 		}
 	}
-}
-my $temporaryPrefix = "$temporaryDirectory/MetaPrism.$hostname.$$";
-if(-r $baseAbundanceGenes) {
-	my @baseAbundanceGeneList = ();
-	open(my $reader, $baseAbundanceGenes);
-	while(my $line = <$reader>) {
-		chomp($line);
-		push(@baseAbundanceGeneList, $line);
-	}
-	close($reader);
-	$baseAbundanceGenes = join(',', @baseAbundanceGeneList);
-} elsif($baseAbundanceGenes =~ /^[0-9]+$/) {
-	my @baseAbundanceGeneList = ();
-	open(my $reader, "$dataPath/single_copy_gene.count.txt") or die "Can't open '$dataPath/single_copy_gene.count.txt': $!";
-	while(scalar(@baseAbundanceGeneList) < $baseAbundanceGenes) {
-		chomp(my $line = <$reader>);
-		my ($baseAbundanceGene) = split(/\t/, $line, -1);
-		push(@baseAbundanceGeneList, $baseAbundanceGene);
-	}
-	close($reader);
-	$baseAbundanceGenes = join(',', @baseAbundanceGeneList);
 }
 my ($metaPrismFile, @bamFileList) = @ARGV;
 if($use_merged_bam_file || $use_samtools_depth) {
@@ -228,11 +227,7 @@ close($writer);
 	}
 	if($baseAbundanceGenes ne '') {
 		my @abundanceList = map {defined($_) ? $_ : 0} @geneAbundanceHash{split(/,/, $baseAbundanceGenes)};
-		if($ignoreOneSideOutlierNumberOfBaseAbundanceGenes > 0) {
-			@abundanceList = sort {$a <=> $b} @abundanceList;
-			@abundanceList = @abundanceList[$ignoreOneSideOutlierNumberOfBaseAbundanceGenes .. $#abundanceList - $ignoreOneSideOutlierNumberOfBaseAbundanceGenes];
-		}
-		$baseAbundance = sum(@abundanceList) / scalar(@abundanceList);
+		$baseAbundance = median(@abundanceList);
 	}
 	print join("\t", @columnList, 'abundance'), "\n";
 	if($baseAbundance eq '') {
@@ -369,4 +364,15 @@ sub getPositionList {
 		}
 	}
 	return @positionList;
+}
+
+sub median {
+	my @tokenList = sort {$a <=> $b} @_;
+	return undef unless(@tokenList);
+	my $number = scalar(@tokenList);
+	if($number % 2 == 0) {
+		return ($tokenList[$number / 2 - 1] + $tokenList[$number / 2]) / 2;
+	} else {
+		return $tokenList[($number - 1) / 2];
+	}
 }
